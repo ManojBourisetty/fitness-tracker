@@ -32,8 +32,11 @@ type AppState = {
   stepEntries: StepEntry[];
   workoutHistory: WorkoutHistoryEntry[];
   activeSession: ActiveWorkoutSession | null;
+  /** Bearer token for the Apple Health sync API routes, set once in Profile. */
+  healthSyncToken: string | null;
 
   updateProfile: (patch: Partial<UserProfile>) => void;
+  setHealthSyncToken: (token: string | null) => void;
 
   addWeightEntry: (entry: Omit<WeightEntry, "id" | "createdAt">) => void;
   removeWeightEntry: (id: string) => void;
@@ -57,9 +60,11 @@ export const useAppStore = create<AppState>()(
       stepEntries: [],
       workoutHistory: [],
       activeSession: null,
+      healthSyncToken: null,
 
       updateProfile: (patch) =>
         set((state) => ({ profile: { ...state.profile, ...patch } })),
+      setHealthSyncToken: (token) => set({ healthSyncToken: token }),
 
       addWeightEntry: (entry) =>
         set((state) => ({

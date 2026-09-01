@@ -5,18 +5,21 @@ import Link from "next/link";
 import { ChevronLeft, Plus, Scale, Trash2 } from "lucide-react";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { useHasHydrated } from "@/lib/store/useHasHydrated";
-import { Card, SectionHeading } from "@/components/ui";
+import { Card, Pill, SectionHeading } from "@/components/ui";
 import { EmptyState } from "@/components/EmptyState";
 import { PageSkeleton } from "@/components/Skeleton";
 import { LineChart } from "@/components/LineChart";
 import { daysAgoIso, formatShortDate, round1, todayIso } from "@/lib/utils";
+import { useHealthMetrics } from "@/lib/useHealthMetrics";
+import { mergeWeightEntries } from "@/lib/mergeHealth";
 
 export default function WeightPage() {
   const hydrated = useHasHydrated();
   const profile = useAppStore((s) => s.profile);
-  const entries = useAppStore((s) => s.weightEntries);
+  const manualEntries = useAppStore((s) => s.weightEntries);
   const addWeightEntry = useAppStore((s) => s.addWeightEntry);
   const removeWeightEntry = useAppStore((s) => s.removeWeightEntry);
+  const health = useHealthMetrics();
 
   const [showForm, setShowForm] = useState(false);
   const [weight, setWeight] = useState("");
@@ -25,6 +28,7 @@ export default function WeightPage() {
 
   if (!hydrated) return <PageSkeleton />;
 
+  const entries = mergeWeightEntries(manualEntries, health.rows);
   const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date));
   const current = sorted.at(-1);
   const starting = sorted[0] ?? { weightKg: profile.startingWeightKg };
@@ -178,18 +182,23 @@ export default function WeightPage() {
             {[...sorted].reverse().slice(0, 20).map((e) => (
               <div key={e.id} className="flex items-center justify-between rounded-xl border border-border bg-bg-elevated p-3">
                 <div>
-                  <p className="text-sm font-medium text-text">{e.weightKg} kg</p>
+                  <p className="flex items-center gap-2 text-sm font-medium text-text">
+                    {e.weightKg} kg
+                    {e.source === "apple-health" && <Pill tone="primary">Synced</Pill>}
+                  </p>
                   <p className="text-xs text-text-muted">
                     {formatShortDate(e.date)} {e.note ? `· ${e.note}` : ""}
                   </p>
                 </div>
-                <button
-                  onClick={() => removeWeightEntry(e.id)}
-                  aria-label="Delete entry"
-                  className="rounded-full p-2 text-text-faint hover:bg-danger-soft hover:text-danger"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                {e.source === "manual" && (
+                  <button
+                    onClick={() => removeWeightEntry(e.id)}
+                    aria-label="Delete entry"
+                    className="rounded-full p-2 text-text-faint hover:bg-danger-soft hover:text-danger"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             ))}
           </div>

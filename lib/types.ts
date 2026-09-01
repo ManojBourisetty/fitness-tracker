@@ -135,6 +135,23 @@ export type WorkoutHistoryEntry = {
   exerciseLog: CompletedExerciseLog[];
 };
 
+export type HealthMetricKey =
+  | "steps"
+  | "distance_km"
+  | "weight_kg"
+  | "resting_heart_rate"
+  | "walking_heart_rate"
+  | "exercise_minutes";
+
+/** A single synced Apple Health data point, as read back from Supabase. */
+export type HealthMetricRow = {
+  metric: HealthMetricKey;
+  date: string; // ISO date
+  value: number;
+  source: string;
+  updated_at: string;
+};
+
 /** In-progress workout session, persisted so a refresh/close doesn't lose state. */
 export type ActiveWorkoutSession = {
   workoutId: string;

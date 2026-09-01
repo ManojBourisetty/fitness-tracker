@@ -70,10 +70,17 @@ see **Environment variables** below.
 
 ## Environment variables
 
-**None are required.** The app has no backend calls and no API keys; all
-data lives in the browser (see below). If you later add a real backend,
-document its connection string / keys here and in your Vercel project's
-Environment Variables settings.
+Core app features need none. Apple Health sync (see below) needs three,
+set in Vercel Project Settings → Environment Variables:
+
+| Variable | Value |
+| --- | --- |
+| `SUPABASE_URL` | `https://bpsmpimotanqglapqqut.supabase.co` |
+| `SUPABASE_ANON_KEY` | The project's publishable key (Supabase dashboard → Settings → API) |
+| `HEALTH_SYNC_TOKEN` | A private random secret you generate — required by both `/api/health-sync` and the Profile screen |
+
+For local development, put the same three in `.env.local` (already
+gitignored).
 
 ## Data & persistence
 
@@ -84,17 +91,21 @@ in `localStorage` through a single Zustand store
 refreshes and navigation, and nothing is lost mid-workout if the tab is
 closed (the active session is persisted too).
 
-This was a deliberate choice over provisioning a database for this build:
-the app has exactly one user (you), nothing here needs to be shared across
-devices yet, and Vercel's serverless functions have no durable filesystem
-of their own — a database would mean provisioning and wiring up a real
-service (e.g. Postgres/Supabase) with credentials this environment doesn't
-have. The persistence layer is written as a swappable adapter, though:
+This was a deliberate choice for manually-entered data: the app has
+exactly one user (you), and `localStorage` is simpler than provisioning
+auth for data that never needs to be written from anywhere but your own
+browser. The persistence layer is written as a swappable adapter, though:
 `zustand/middleware`'s `persist` takes any object with `getItem` /
-`setItem` / `removeItem`. To move to a real backend later, replace the
+`setItem` / `removeItem`. To move it to a real backend later, replace the
 `storage: createJSONStorage(() => localStorage)` line in
 `lib/store/useAppStore.ts` with a small adapter that calls your API — no
 component or page needs to change.
+
+Synced Apple Health data is different: it needs to be written from your
+phone (see below), which a browser's `localStorage` can't receive. That
+half of the data lives in a small Postgres table on Supabase instead, and
+the two are merged at render time (`lib/mergeHealth.ts`) — a synced entry
+for a given day always takes precedence over a manual one for that day.
 
 Data model (`lib/types.ts`) is intentionally decoupled from the UI:
 `Exercise`, `Workout`, `WorkoutSection`, `WorkoutExercise`, `UserProfile`,
@@ -105,31 +116,65 @@ is a data change, not a UI change.
 
 ## Apple Health integration
 
-**A web app cannot read from or write to Apple Health.** HealthKit is a
-native iOS framework with no web API or browser bridge — this is an iOS
-platform limitation, not something any web app (installed as a PWA or
-not) can work around, and this app does not claim otherwise anywhere in
-the UI (every step/weight entry is explicitly labeled "Manual entry").
+**A web app cannot read from or write to Apple Health directly.** HealthKit
+is a native iOS framework with no web API or browser bridge — that's a
+platform limitation, not something any web app (PWA or not) can work
+around. So this app integrates through the **Health Auto Export** iOS app
+instead: it reads Health data and pushes it to a webhook on a schedule.
 
-The data model already anticipates it, though:
+### How it works
 
-- `StepEntry` and `WeightEntry` both carry a `source: "manual" | "apple-health"`
-  field, so once real data arrives from a synced source it renders
-  identically to manual entries, just tagged differently.
-- The Profile screen has a "Data Sources" section that currently shows
-  "Manual entry" for steps/weight/heart-rate and explains the limitation.
-- The Progress screen's "Fitness" section (resting HR, walking HR, VO₂ max)
-  is already laid out and will populate the moment that data exists —
-  it currently shows an explanatory empty state instead of fake numbers.
+```
+Apple Health → Health Auto Export (iOS) → POST /api/health-sync → Supabase → /api/health-data → app UI
+```
 
-**Planned integration path:** a small native companion (a thin iOS app or
-a Shortcuts automation using HealthKit) that periodically POSTs
-steps/weight/heart-rate/VO₂max to a backend API, which then upserts
-`StepEntry`/`WeightEntry` rows with `source: "apple-health"`. That
-requires (a) the swappable persistence backend described above, and (b) a
-minimal API route or serverless function to receive the sync payload —
-neither exists yet in this build, by design, since it needs an actual
-native shell to call it.
+- **`app/api/health-sync`** (`POST`) — the webhook Health Auto Export calls.
+  Requires `Authorization: Bearer <HEALTH_SYNC_TOKEN>`. Parses the export's
+  JSON (`lib/healthAutoExport.ts`) and upserts normalized rows.
+- **Supabase** — one table, `health_metrics` (`metric`, `date`, `value`,
+  `source`), with Row Level Security enabled and **no permissive
+  policies** — direct table access via the REST API is blocked entirely.
+  The only way in is two `security definer` RPC functions
+  (`health_metrics_upsert` / `health_metrics_read`), reachable only after
+  the bearer-token check in the route handler passes.
+- **`app/api/health-data`** (`GET`) — what the app's own frontend calls to
+  read synced rows back, gated by the same token (entered once in
+  Profile → Apple Health Sync, stored in `localStorage`).
+- **`lib/mergeHealth.ts`** — merges synced rows into the Steps, Weight,
+  Home, and Progress screens; a synced day's entry always wins over a
+  manually-entered one for that same date. Synced entries show a "Synced"
+  badge and can't be deleted from the app (they'd just reappear on the
+  next export).
+
+Metrics synced today: **steps, walking/running distance, weight, resting
+heart rate, walking heart rate, and Apple Exercise Time** (populates the
+Progress screen's "Fitness" section and weekly exercise-minutes stat).
+VO₂ max isn't wired up yet — see Limitations.
+
+### Setting it up
+
+1. **Deploy first.** The three environment variables above must be set on
+   the Vercel project (Supabase URL/key are in this README; generate your
+   own `HEALTH_SYNC_TOKEN`, e.g. `openssl rand -hex 24`).
+2. In the app, go to **Profile → Apple Health Sync**, paste the same
+   token into "Sync token", and tap **Save Token**, then **Test
+   Connection** to confirm it's accepted.
+3. Copy the **Webhook URL** shown there (`https://<your-domain>/api/health-sync`).
+4. In **Health Auto Export** on your iPhone: create a new **Automation** →
+   **REST API** export. Set the URL to the webhook URL from step 3, add
+   header `Authorization: Bearer <your token>`, select the metrics
+   (Steps, Walking + Running Distance, Weight, Resting Heart Rate, Walking
+   Heart Rate Average, Apple Exercise Time), set the aggregation to
+   **Daily**, and set a schedule (e.g. once a day).
+5. Run the automation once manually from the app to backfill today, then
+   let it run on schedule.
+
+The parser in `lib/healthAutoExport.ts` is intentionally tolerant of shape
+drift (unrecognized metric names/points are skipped, not fatal) since its
+exact JSON shape wasn't verified against a live export while building
+this — if a metric doesn't show up after a real sync, check the Vercel
+function logs for `/api/health-sync` and adjust the `METRIC_NAME_MAP`
+there.
 
 ## Progressive training
 
@@ -159,14 +204,17 @@ breath, severe pain) with a one-tap way to end the session.
 ## Architecture overview
 
 ```
-app/                       Next.js App Router routes (all client components —
-                            this app is inherently personal/local-storage-driven,
-                            so there's no server-rendering benefit to chase)
+app/                       Next.js App Router routes (pages are all client
+                            components -- this is a personal, local-storage-
+                            driven app, so there's no server-rendering
+                            benefit to chase there)
   page.tsx                 Home dashboard
   workout/                 Weekly plan browser + interactive session + rest timer
   exercises/                Library + per-exercise detail
   progress/                Weekly progress, weight, steps, history
-  profile/                 Editable profile, theme, data reset
+  profile/                 Editable profile, theme, Apple Health sync, data reset
+  api/health-sync/         POST -- Health Auto Export webhook receiver (server)
+  api/health-data/         GET -- synced data for the frontend (server)
 
 components/                 Presentational + interactive UI (nav, cards, charts,
                             progress rings, the exercise animation system, timers)
@@ -178,6 +226,8 @@ lib/
   store/useAppStore.ts      Zustand store + persistence
   progression.ts             Adherence-driven volume progression
   coach.ts                   Weekly review generator (real data only)
+  supabaseServer.ts, healthSyncAuth.ts, healthAutoExport.ts   Health-sync backend
+  useHealthMetrics.ts, mergeHealth.ts   Health-sync frontend fetch + merge
   derived.ts, utils.ts, workoutSteps.ts   Small pure helpers
 
 public/
@@ -190,21 +240,32 @@ The app is a standard Next.js project — Vercel auto-detects the framework,
 so `vercel.json` isn't needed. To deploy:
 
 1. Import the GitHub repository into a new Vercel project (Framework
-   Preset: Next.js, no environment variables required).
+   Preset: Next.js).
 2. Set the production branch to whichever branch has this app (Vercel
    deploys `main` by default).
-3. Deploy — no build configuration overrides are needed.
+3. Add the three environment variables from **Environment variables**
+   above if you want Apple Health sync working (core app features work
+   without them).
+4. Deploy — no build configuration overrides are needed.
 
 ## Limitations / what's next
 
-- **Apple Health / native sync** is not implemented (see above) — it needs
-  a native companion and a small API, both out of scope for a web-only build.
-- **Resting/walking heart rate and VO₂ max** have no manual-entry UI yet
-  (they're not the kind of number people type in by hand) — they'll light
-  up once a synced data source exists.
-- Data is per-device (`localStorage`); it does not sync across your phone,
-  tablet, and laptop yet. That requires the backend swap described in
-  **Data & persistence**.
+- **VO₂ max** isn't synced yet — Health Auto Export exposes it, but it
+  wasn't part of the first metric set; add `vo2_max` to the `metric` check
+  constraint in the Supabase migration and to `METRIC_NAME_MAP` in
+  `lib/healthAutoExport.ts` to add it.
+- The Health Auto Export JSON shape in `lib/healthAutoExport.ts` was
+  written from general knowledge of the app's "REST API automation"
+  format, not verified against a live export — see the note at the end of
+  **Apple Health integration** if a metric doesn't appear after a real sync.
+- Manually-entered data (workout history, difficulty ratings, notes,
+  profile) is still per-device (`localStorage`) and doesn't sync across
+  your phone/tablet/laptop. Only step/weight/heart-rate/exercise-minutes
+  data synced via Apple Health is shared, since that's the data that now
+  lives in Supabase rather than the browser.
+- The Apple Health sync token is a single shared secret (not per-user
+  auth) — reasonable for a single-user personal app, but rotate it via
+  Profile + the Vercel env var if it's ever exposed.
 - The exercise "animations" are original CSS/SVG stick-figure loops, not
   photographic or video demonstrations, by design (fast-loading,
   copyright-free, theme-aware, and legible at a glance).

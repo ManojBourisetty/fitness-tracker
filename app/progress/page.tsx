@@ -6,18 +6,28 @@ import { useAppStore } from "@/lib/store/useAppStore";
 import { useHasHydrated } from "@/lib/store/useHasHydrated";
 import { buildWeeklyReview } from "@/lib/coach";
 import { getWeekDates, round1, startOfWeekIso } from "@/lib/utils";
-import { Card, BarMeter, SectionHeading } from "@/components/ui";
+import { Card, BarMeter, Pill, SectionHeading } from "@/components/ui";
 import { PageSkeleton } from "@/components/Skeleton";
 import { EmptyState } from "@/components/EmptyState";
+import { useHealthMetrics } from "@/lib/useHealthMetrics";
+import { mergeStepEntries, mergeWeightEntries, latestHeartRate, totalExerciseMinutes } from "@/lib/mergeHealth";
+import { daysAgoIso } from "@/lib/utils";
 
 export default function ProgressPage() {
   const hydrated = useHasHydrated();
   const profile = useAppStore((s) => s.profile);
   const history = useAppStore((s) => s.workoutHistory);
-  const stepEntries = useAppStore((s) => s.stepEntries);
-  const weightEntries = useAppStore((s) => s.weightEntries);
+  const manualSteps = useAppStore((s) => s.stepEntries);
+  const manualWeights = useAppStore((s) => s.weightEntries);
+  const health = useHealthMetrics();
 
   if (!hydrated) return <PageSkeleton />;
+
+  const stepEntries = mergeStepEntries(manualSteps, health.rows);
+  const weightEntries = mergeWeightEntries(manualWeights, health.rows);
+  const restingHr = latestHeartRate(health.rows, "resting_heart_rate");
+  const walkingHr = latestHeartRate(health.rows, "walking_heart_rate");
+  const weeklyExerciseMinutes = totalExerciseMinutes(health.rows, daysAgoIso(7));
 
   const hasAnyData = history.length > 0 || stepEntries.length > 0 || weightEntries.length > 0;
   const review = buildWeeklyReview(profile, history, stepEntries, weightEntries);
@@ -56,11 +66,29 @@ export default function ProgressPage() {
           </div>
 
           <div>
-            <SectionHeading>Fitness</SectionHeading>
-            <Card className="text-center text-sm text-text-muted">
-              <p>Resting heart rate, walking heart rate, and VO₂ max will appear here once available.</p>
-              <p className="mt-2 text-xs text-text-faint">These metrics require Apple Health or a wearable — see Profile for sync status.</p>
-            </Card>
+            <SectionHeading
+              action={
+                health.hasToken && <Pill tone="primary">Synced</Pill>
+              }
+            >
+              Fitness
+            </SectionHeading>
+            {restingHr != null || walkingHr != null || weeklyExerciseMinutes > 0 ? (
+              <div className="grid grid-cols-3 gap-3">
+                <StatCard label="Resting HR" value={restingHr != null ? `${Math.round(restingHr)} bpm` : "—"} />
+                <StatCard label="Walking HR" value={walkingHr != null ? `${Math.round(walkingHr)} bpm` : "—"} />
+                <StatCard label="Exercise (7d)" value={`${weeklyExerciseMinutes} min`} />
+              </div>
+            ) : (
+              <Card className="text-center text-sm text-text-muted">
+                <p>Resting heart rate, walking heart rate, and exercise minutes will appear here once Apple Health is syncing.</p>
+                <p className="mt-2 text-xs text-text-faint">
+                  {health.hasToken
+                    ? "Connected — no readings synced yet."
+                    : "Set up Apple Health sync from Profile to populate this."}
+                </p>
+              </Card>
+            )}
           </div>
 
           <div>

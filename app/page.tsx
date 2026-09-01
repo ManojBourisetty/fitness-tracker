@@ -11,6 +11,8 @@ import { WeekStrip } from "@/components/WeekStrip";
 import { Card, Pill, SectionHeading } from "@/components/ui";
 import { PageSkeleton } from "@/components/Skeleton";
 import { todayIso } from "@/lib/utils";
+import { useHealthMetrics } from "@/lib/useHealthMetrics";
+import { mergeStepEntries, mergeWeightEntries } from "@/lib/mergeHealth";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -26,14 +28,17 @@ export default function HomePage() {
   const history = useAppStore((s) => s.workoutHistory);
   const stepEntries = useAppStore((s) => s.stepEntries);
   const weightEntries = useAppStore((s) => s.weightEntries);
+  const health = useHealthMetrics();
 
   if (!hydrated) return <PageSkeleton />;
 
   const today = new Date();
   const workout = getWorkoutForDay(today.getDay());
   const todaysHistory = workout ? history.find((h) => h.date === todayIso() && h.workoutId === workout.id) : undefined;
-  const steps = todayStepEntry(stepEntries);
-  const weight = latestWeight(weightEntries);
+  const mergedSteps = mergeStepEntries(stepEntries, health.rows);
+  const mergedWeights = mergeWeightEntries(weightEntries, health.rows);
+  const steps = todayStepEntry(mergedSteps);
+  const weight = latestWeight(mergedWeights);
   const weekStrip = getWeekStrip(history, today);
   const stepPercent = steps ? Math.round((steps.steps / profile.stepGoal) * 100) : 0;
 

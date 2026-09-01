@@ -5,20 +5,23 @@ import Link from "next/link";
 import { ChevronLeft, Footprints, Plus, Trash2 } from "lucide-react";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { useHasHydrated } from "@/lib/store/useHasHydrated";
-import { Card, SectionHeading } from "@/components/ui";
+import { Card, Pill, SectionHeading } from "@/components/ui";
 import { EmptyState } from "@/components/EmptyState";
 import { PageSkeleton } from "@/components/Skeleton";
 import { ProgressRing } from "@/components/ProgressRing";
 import { LineChart } from "@/components/LineChart";
 import { averageSteps, bestStepDay, todayStepEntry } from "@/lib/derived";
 import { formatShortDate, todayIso } from "@/lib/utils";
+import { useHealthMetrics } from "@/lib/useHealthMetrics";
+import { mergeStepEntries } from "@/lib/mergeHealth";
 
 export default function StepsPage() {
   const hydrated = useHasHydrated();
   const profile = useAppStore((s) => s.profile);
-  const entries = useAppStore((s) => s.stepEntries);
+  const manualEntries = useAppStore((s) => s.stepEntries);
   const upsertStepEntry = useAppStore((s) => s.upsertStepEntry);
   const removeStepEntry = useAppStore((s) => s.removeStepEntry);
+  const health = useHealthMetrics();
 
   const [showForm, setShowForm] = useState(false);
   const [steps, setSteps] = useState("");
@@ -27,6 +30,7 @@ export default function StepsPage() {
 
   if (!hydrated) return <PageSkeleton />;
 
+  const entries = mergeStepEntries(manualEntries, health.rows);
   const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date));
   const today = todayStepEntry(entries);
   const weekAvg = averageSteps(entries, 7);
@@ -173,16 +177,21 @@ export default function StepsPage() {
             {[...sorted].reverse().slice(0, 20).map((e) => (
               <div key={e.id} className="flex items-center justify-between rounded-xl border border-border bg-bg-elevated p-3">
                 <div>
-                  <p className="text-sm font-medium text-text">{e.steps.toLocaleString()} steps</p>
+                  <p className="flex items-center gap-2 text-sm font-medium text-text">
+                    {e.steps.toLocaleString()} steps
+                    {e.source === "apple-health" && <Pill tone="primary">Synced</Pill>}
+                  </p>
                   <p className="text-xs text-text-muted">{formatShortDate(e.date)}</p>
                 </div>
-                <button
-                  onClick={() => removeStepEntry(e.id)}
-                  aria-label="Delete entry"
-                  className="rounded-full p-2 text-text-faint hover:bg-danger-soft hover:text-danger"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                {e.source === "manual" && (
+                  <button
+                    onClick={() => removeStepEntry(e.id)}
+                    aria-label="Delete entry"
+                    className="rounded-full p-2 text-text-faint hover:bg-danger-soft hover:text-danger"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             ))}
           </div>
